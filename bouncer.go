@@ -235,11 +235,11 @@ func (e *Bouncer[T]) Pipe(dest *Bouncer[T]) (int, error) {
 //
 // Returns the number of items read and any error encountered.
 func (e *Bouncer[T]) ReadUntil(b []T, timeout time.Duration) (n int, err error) {
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
-
 	stopTimer := make(chan struct{})
 	defer close(stopTimer)
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
 
 	go func(wait <-chan time.Time, stop <-chan struct{}) {
 		select {
@@ -319,10 +319,11 @@ func (e *Bouncer[T]) getIterator(buf []T, waitForFull bool, timeout time.Duratio
 		)
 
 		if timeout > 0 {
+			stopTimer = make(chan struct{})
+			defer close(stopTimer)
+
 			timer = time.NewTimer(timeout)
 			defer timer.Stop()
-
-			stopTimer = make(chan struct{})
 
 			go func() {
 				for {
