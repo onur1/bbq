@@ -831,3 +831,34 @@ func TestSlicesWhenDefaultBufferSize(t *testing.T) {
 		}
 	}
 }
+
+func TestSlicesWhen(t *testing.T) {
+	q := bbq.New[int](8)
+
+	go func() {
+		i := 0
+		for ; i < 10; i++ {
+			q.Write(i)
+			time.Sleep(time.Millisecond * 50)
+		}
+		q.Close()
+	}()
+
+	collected := make([][]int, 0)
+
+	for xs := range q.SlicesWhen(4, time.Millisecond*100) {
+		ys := make([]int, len(xs))
+		copy(ys, xs)
+		collected = append(collected, ys)
+	}
+
+	if len(collected) < 4 {
+		t.Fatalf("expected to collect more than 4 batches, got %d", len(collected))
+	}
+
+	for _, xs := range collected {
+		if len(xs) > 3 {
+			t.Errorf("expected batches to have less than 4 items, got %d", len(xs))
+		}
+	}
+}
