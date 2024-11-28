@@ -28,7 +28,7 @@ func TestReadWriteBasic(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		n, err := q.Read(b)
 		if err != nil {
-			t.Fatalf("unexpected error %v", bouncer.ErrQueueClosed)
+			t.Fatalf("unexpected error %v", err)
 		}
 		e := results[0]
 		results = results[1:]
