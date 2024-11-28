@@ -345,15 +345,9 @@ func (e *Bouncer[T]) getIterator(buf []T, waitForFull bool, timeout time.Duratio
 		for {
 			n, err = e.read(buf, waitForFull)
 			if err != nil || n == 0 {
-				if timer != nil {
-					close(stopTimer)
-				}
 				return
 			}
 			if !yield(buf[:n]) {
-				if timer != nil {
-					close(stopTimer)
-				}
 				return
 			}
 			if timer != nil {
