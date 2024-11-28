@@ -3,6 +3,7 @@ package bouncer_test
 import (
 	"errors"
 	"reflect"
+	"sort"
 	"sync"
 	"testing"
 	"time"
@@ -205,7 +206,7 @@ func TestWriteAfterClose(t *testing.T) {
 		}
 
 		if _, err := q.Write(4); !errors.Is(err, bouncer.ErrQueueClosed) {
-			t.Fatalf("expected queue closed error, got %v", err)
+			t.Fatalf("expected ErrQueueClosed, got %v", err)
 		}
 
 		// Verify the items
@@ -253,7 +254,7 @@ func TestReadAfterClose(t *testing.T) {
 	}
 
 	if !errors.Is(gotErr, bouncer.ErrQueueClosed) {
-		t.Fatalf("expected a queue closed error, got %v", gotErr)
+		t.Fatalf("expected a ErrQueueClosed, got %v", gotErr)
 	}
 }
 
@@ -447,7 +448,7 @@ func TestQueueClosedWithMultipleWriters(t *testing.T) {
 	}
 }
 
-func TestWrapAround(t *testing.T) {
+func TestReadWraparound(t *testing.T) {
 	q := bouncer.New[int](4) // Small buffer to force wrap-around
 
 	// Step 1: Fill the buffer completely
@@ -488,6 +489,49 @@ func TestWrapAround(t *testing.T) {
 	}
 }
 
+func TestWriteWraparound(t *testing.T) {
+	// Step 1: Create a small buffer
+	q := bouncer.New[int](4)
+	_, err := q.Write(1, 2) // Fill indices 0 and 1
+	if err != nil {
+		t.Fatalf("unexpected error during initial Write: %v", err)
+	}
+
+	// Step 3: Read one item to move the head forward
+	buf := make([]int, 1)
+	n, err := q.Read(buf) // Read index 0, freeing up one slot
+	if err != nil {
+		t.Fatalf("unexpected error during initial Read: %v", err)
+	}
+	if n != 1 || buf[0] != 1 {
+		t.Fatalf("expected to read [1], but got %v", buf[:n])
+	}
+
+	// Step 4: Write additional items to cause wraparound
+	_, err = q.Write(3, 4, 5) // Wraparound occurs here: 3 fills index 2, 4 fills index 3, 5 wraps to index 0
+	if err != nil {
+		t.Fatalf("unexpected error during wraparound Write: %v", err)
+	}
+
+	// Step 5: Read all remaining items to verify correctness
+	buf = make([]int, 4)
+	n, err = q.Read(buf) // Read indices 1, 2, 3, and wrapped index 0
+	if err != nil {
+		t.Fatalf("unexpected error during final Read: %v", err)
+	}
+	if n != 4 {
+		t.Fatalf("expected to read 4 items, but got %d", n)
+	}
+
+	// Verify data integrity
+	expected := []int{2, 3, 4, 5}
+	for i := 0; i < n; i++ {
+		if buf[i] != expected[i] {
+			t.Fatalf("at index %d: expected %d, but got %d", i, expected[i], buf[i])
+		}
+	}
+}
+
 func TestLargeVolumeReadWrite(t *testing.T) {
 	q := bouncer.New[int](1000000)
 
@@ -506,7 +550,7 @@ func TestLargeVolumeReadWrite(t *testing.T) {
 		n, err := q.Read(b)
 		if err != nil {
 			if !errors.Is(err, bouncer.ErrQueueClosed) {
-				t.Fatalf("expected queue closed error, got %v", err)
+				t.Fatalf("expected ErrQueueClosed, got %v", err)
 			}
 			break
 		}
@@ -636,5 +680,154 @@ func TestItemsYieldStop(t *testing.T) {
 
 	if items[0] != 1 {
 		t.Fatalf("expected item 1, got %v", items[0])
+	}
+}
+
+func TestPipe(t *testing.T) {
+	a := bouncer.New[int](4)
+	b := bouncer.New[int](2)
+	c := bouncer.New[int](16)
+
+	go a.Pipe(c)
+	go b.Pipe(c)
+
+	a.Write(1)
+	b.Write(2, 3, 4, 5, 6)
+	a.Write(7, 8, 9, 10, 11)
+
+	time.Sleep(time.Millisecond * 30) // Wait for c to collect everything
+	if c.Used() != 11 {
+		t.Fatalf("expected c to collect 11 items, got %d", c.Used())
+	}
+	c.Close()
+
+	collected := make([]int, 0)
+
+	for item := range c.Items() {
+		collected = append(collected, item)
+	}
+
+	sort.Ints(collected)
+
+	expected := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}
+
+	if !reflect.DeepEqual(expected, collected) {
+		t.Fatalf("expected %v, got %v", expected, collected)
+	}
+}
+
+func TestPipeSourceClosed(t *testing.T) {
+	a := bouncer.New[int](2)
+	b := bouncer.New[int](2)
+
+	time.AfterFunc(time.Millisecond*30, func() {
+		a.Close()
+	})
+
+	_, err := a.Pipe(b)
+	if !errors.Is(err, bouncer.ErrQueueClosed) {
+		t.Fatalf("expected ErrQueueClosed, got %v", err)
+	}
+
+	if !a.IsClosed() {
+		t.Fatal("expected a to be closed")
+	}
+
+	if b.IsClosed() {
+		t.Fatal("expected b to be open")
+	}
+}
+
+func TestPipeDestinationClosed(t *testing.T) {
+	a := bouncer.New[int](2)
+	b := bouncer.New[int](2)
+	c := bouncer.New[int](1)
+
+	var wg sync.WaitGroup
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		_, err := a.Pipe(c)
+		if !errors.Is(err, bouncer.ErrQueueClosed) {
+			t.Errorf("expected ErrQueueClosed, got %v", err)
+		}
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		_, err := b.Pipe(c)
+		if !errors.Is(err, bouncer.ErrQueueClosed) {
+			t.Errorf("expected ErrQueueClosed, got %v", err)
+		}
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		n, err := a.Write(1)
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+		if n != 1 {
+			t.Errorf("expected to have written 1 item, got %d", n)
+		}
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		n, err := b.Write(2, 3, 4, 5, 6)
+		if !errors.Is(err, bouncer.ErrQueueClosed) {
+			t.Errorf("expected ErrQueueClosed, got %v", err)
+		}
+		if n != 3 {
+			t.Errorf("expected to have written 3 items, got %d", n)
+		}
+	}()
+
+	c.Close()
+
+	wg.Wait()
+
+	if !a.IsClosed() {
+		t.Fatal("expected a to be closed")
+	}
+
+	if !b.IsClosed() {
+		t.Fatal("expected b to be closed")
+	}
+}
+
+func TestSlicesDefaultBufferSize(t *testing.T) {
+	q := bouncer.New[int](16)
+
+	for i := 0; i < 16; i++ {
+		q.Write(i)
+	}
+
+	q.Close()
+
+	for batch := range q.Slices(0) {
+		if len(batch) != 16 {
+			t.Fatalf("expected to retrieve 16 items in a batch, got %d", len(batch))
+		}
+	}
+}
+
+func TestSlicesWhenDefaultBufferSize(t *testing.T) {
+	q := bouncer.New[int](4)
+
+	for i := 0; i < 4; i++ {
+		q.Write(i)
+	}
+
+	q.Close()
+
+	for batch := range q.SlicesWhen(0, 0) {
+		if len(batch) != 4 {
+			t.Fatalf("expected to retrieve 16 items in a batch, got %d", len(batch))
+		}
 	}
 }
