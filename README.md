@@ -1,6 +1,6 @@
-# bbq 🥩
+# BBQ 🥩
 
-**bbq** is a thread-safe bounded queue with batch reads/writes,  timeouts and iterators for streaming data processing.
+**BBQ** is a thread-safe bounded queue with batch reads/writes,  timeouts and iterators for streaming data processing.
 
 ## Installation
 
