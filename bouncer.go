@@ -219,11 +219,13 @@ func (e *Bouncer[T]) Pipe(dest *Bouncer[T]) (int, error) {
 	for {
 		n, err = e.read(buf, false)
 		if err != nil || n == 0 {
-			dest.Close()
 			return 0, err
 		}
 
 		if n, err = dest.Write(buf[:n]...); err != nil {
+			if errors.Is(err, ErrQueueClosed) {
+				e.Close()
+			}
 			return n, err
 		}
 	}
