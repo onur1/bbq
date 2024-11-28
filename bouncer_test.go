@@ -86,6 +86,438 @@ func TestSizePowerOfTwo(t *testing.T) {
 	}
 }
 
+func TestReadUntilAvailableBeforeTimeout(t *testing.T) {
+	q := bouncer.New[int](4)
+
+	go func() {
+		time.Sleep(100 * time.Millisecond) // Simulate delay in writing data
+		q.Write(1, 2, 3)
+		time.Sleep(250 * time.Millisecond)
+		q.Write(4)
+	}()
+
+	buf := make([]int, 4)
+	n, err := q.ReadUntil(buf, 500*time.Millisecond)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if n != 4 {
+		t.Fatalf("expected to read 4 items, but got %d", n)
+	}
+	expected := []int{1, 2, 3, 4}
+	for i := 0; i < n; i++ {
+		if buf[i] != expected[i] {
+			t.Fatalf("at index %d: expected %d, but got %d", i, expected[i], buf[i])
+		}
+	}
+}
+
+func TestReadUntilTimeoutElapsed(t *testing.T) {
+	q := bouncer.New[int](4)
+
+	buf := make([]int, 4)
+
+	q.Write(1, 2)
+
+	go func() {
+		time.Sleep(500 * time.Millisecond) // Simulate delay beyond timeout
+		q.Write(3, 4)
+	}()
+
+	n, err := q.ReadUntil(buf, 200*time.Millisecond)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Assert that only the first two items are read
+	if n != 2 {
+		t.Fatalf("expected to read 2 items, but got %d", n)
+	}
+	expected := []int{1, 2}
+	for i := 0; i < n; i++ {
+		if buf[i] != expected[i] {
+			t.Fatalf("at index %d: expected %d, but got %d", i, expected[i], buf[i])
+		}
+	}
+
+	// Wait for the delayed write to complete
+	time.Sleep(400 * time.Millisecond)
+
+	// Read the remaining items
+	n, err = q.Read(buf)
+	if err != nil {
+		t.Fatalf("unexpected error on second read: %v", err)
+	}
+
+	// Assert that the remaining items are read correctly
+	if n != 2 {
+		t.Fatalf("expected to read 2 items, but got %d", n)
+	}
+	expected = []int{3, 4}
+	for i := 0; i < n; i++ {
+		if buf[i] != expected[i] {
+			t.Fatalf("at index %d: expected %d, but got %d", i, expected[i], buf[i])
+		}
+	}
+}
+
+func TestReadUntilQueueClosedFullyDrained(t *testing.T) {
+	q := bouncer.New[int](4)
+
+	go func() {
+		q.Write(6)
+		q.Close()
+	}()
+
+	buf := make([]int, 4)
+
+	n, err := q.ReadUntil(buf, 500*time.Millisecond)
+	if err != nil && err != bouncer.ErrQueueClosed {
+		t.Fatalf("unexpected error on close: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("expected to read 1 item before queue is closed, but got %d", n)
+	}
+	if buf[0] != 6 {
+		t.Fatalf("expected to read 6, but got %d", buf[0])
+	}
+}
+
+func TestWriteAfterClose(t *testing.T) {
+	for _, size := range []int{1, 2, 4} {
+		q := bouncer.New[int](size)
+
+		if q.IsClosed() {
+			t.Fatal("expected to be open")
+		}
+
+		n := 0
+		for ; n < size; n++ {
+			if _, err := q.Write(n); err != nil {
+				t.Fatalf("expected no error, got %v", err)
+			}
+		}
+
+		q.Close()
+
+		if !q.IsClosed() {
+			t.Fatal("expected to be closed")
+		}
+
+		if _, err := q.Write(4); !errors.Is(err, bouncer.ErrQueueClosed) {
+			t.Fatalf("expected queue closed error, got %v", err)
+		}
+
+		// Verify the items
+		buf := make([]int, size)
+		n, err := q.Read(buf)
+		if n != size || err != nil {
+			t.Errorf("expected %d items and no error, got n=%d, err=%v", size, n, err)
+		}
+	}
+}
+
+func TestReadAfterClose(t *testing.T) {
+	q := bouncer.New[int](16)
+
+	for i := 1; i <= 5; i++ {
+		q.Write(i)
+	}
+
+	q.Close()
+
+	b := make([]int, 3)
+
+	results := [][]int{
+		{1, 2, 3},
+		{4, 5},
+	}
+
+	var gotErr error
+
+	for i := 0; i < 3; i++ {
+		n, err := q.Read(b)
+		if err != nil {
+			gotErr = err
+			break
+		}
+		e := results[0]
+		results = results[1:]
+		if !reflect.DeepEqual(b[:n], e) {
+			t.Fatalf("expected %v, got %v", e, b[:n])
+		}
+	}
+
+	if len(results) != 0 {
+		t.Fatalf("expected results to be fully retrieved, got %v", results)
+	}
+
+	if !errors.Is(gotErr, bouncer.ErrQueueClosed) {
+		t.Fatalf("expected a queue closed error, got %v", gotErr)
+	}
+}
+
+func TestWriteConcurrent(t *testing.T) {
+	q := bouncer.New[int](256)
+
+	var wg sync.WaitGroup
+	totalProducers := 64
+	itemsPerProducer := 4
+	expectedTotalItems := totalProducers * itemsPerProducer
+
+	for i := 0; i < totalProducers; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			for j := 0; j < itemsPerProducer; j++ {
+				_, err := q.Write(id*10 + j)
+				if err != nil {
+					t.Errorf("producer error: %v", err)
+				}
+			}
+		}(i)
+	}
+
+	wg.Wait()
+
+	q.Close()
+
+	var collectedItems []int
+	for xs := range q.SlicesWhen(expectedTotalItems, 0) {
+		collectedItems = append(collectedItems, xs...)
+	}
+
+	if len(collectedItems) != expectedTotalItems {
+		t.Fatalf("expected %d items, but collected %d", expectedTotalItems, len(collectedItems))
+	}
+
+	itemSet := make(map[int]bool)
+	for _, item := range collectedItems {
+		itemSet[item] = true
+	}
+
+	for i := 0; i < totalProducers; i++ {
+		for j := 0; j < itemsPerProducer; j++ {
+			expectedItem := i*10 + j
+			if !itemSet[expectedItem] {
+				t.Errorf("missing item: %d", expectedItem)
+			}
+		}
+	}
+}
+
+func TestReadEmpty(t *testing.T) {
+	q := bouncer.New[int](16)
+
+	b := make([]int, 2)
+
+	// Launch a goroutine to get from the empty queue
+	ch := make(chan struct{})
+
+	go func() {
+		n, err := q.Read(b)
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+		if n != 1 {
+			t.Errorf("expected 1, got %d", n)
+		}
+		ch <- struct{}{}
+	}()
+
+	// Simulate pushing an item after a delay
+	time.Sleep(time.Millisecond * 30)
+	_, err := q.Write(1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Wait for the get operation to complete
+	<-ch
+}
+
+func TestSlices(t *testing.T) {
+	q := bouncer.New[int](4)
+
+	go func() {
+		for i := 1; i <= 10; i++ {
+			q.Write(i)
+		}
+		q.Close()
+	}()
+
+	expected := [][]int{
+		{1, 2},
+		{3, 4},
+		{5, 6},
+		{7, 8},
+		{9, 10},
+	}
+
+	actual := [][]int{}
+	for items := range q.Slices(2) {
+		actual = append(actual, append([]int{}, items...))
+	}
+
+	if len(actual) != len(expected) {
+		t.Fatalf("expected %d batches, got %d", len(expected), len(actual))
+	}
+	for i := range expected {
+		if !reflect.DeepEqual(actual[i], expected[i]) {
+			t.Errorf("expected batch %v, got %v", expected[i], actual[i])
+		}
+	}
+}
+
+func TestSlicesYieldStop(t *testing.T) {
+	q := bouncer.New[int](4)
+
+	for i := 1; i <= 4; i++ {
+		q.Write(i)
+	}
+
+	it := q.Slices(2)
+
+	batches := [][]int{}
+	it(func(items []int) bool {
+		batches = append(batches, append([]int{}, items...))
+		return false // Stop iteration after the first batch
+	})
+
+	// Validate only the first batch was retrieved
+	if len(batches) != 1 {
+		t.Fatalf("expected 1 batch, got %d", len(batches))
+	}
+
+	if !reflect.DeepEqual(batches[0], []int{1, 2}) {
+		t.Fatalf("expected batch [1 2], got %v", batches[0])
+	}
+}
+
+func TestQueueClosedDuringChunkedWriting(t *testing.T) {
+	q := bouncer.New[int](4)
+
+	// Fill partially
+	q.Write(1, 2)
+
+	done := make(chan error)
+	go func() {
+		// Producer tries to add more items than the buffer can hold
+		_, err := q.Write(3, 4, 5, 6)
+		done <- err
+	}()
+
+	// Simulate a delay to allow partial processing
+	time.Sleep(50 * time.Millisecond)
+
+	// Close the queue mid-operation
+	q.Close()
+
+	// Check the error returned to the producer
+	err := <-done
+	if err == nil || !errors.Is(err, bouncer.ErrQueueClosed) {
+		t.Fatalf("expected ErrQueueClosed, got %v", err)
+	}
+}
+
+func TestQueueClosedWithMultipleWriters(t *testing.T) {
+	q := bouncer.New[int](2)
+	q.Write(1, 2) // Fill the buffer
+
+	producerErrors := make(chan error, 3)
+	for i := 0; i < 3; i++ {
+		go func(id int) {
+			_, err := q.Write(id)
+			producerErrors <- err
+		}(i)
+	}
+
+	// Simulate a delay to ensure producers are waiting
+	time.Sleep(50 * time.Millisecond)
+
+	// Close the queue while producers are blocked
+	q.Close()
+
+	// Verify all producers receive ErrQueueClosed
+	for i := 0; i < 3; i++ {
+		err := <-producerErrors
+		if err == nil || !errors.Is(err, bouncer.ErrQueueClosed) {
+			t.Errorf("expected ErrQueueClosed for producer %d, got %v", i, err)
+		}
+	}
+}
+
+func TestWrapAround(t *testing.T) {
+	q := bouncer.New[int](4) // Small buffer to force wrap-around
+
+	// Step 1: Fill the buffer completely
+	q.Write(1) // head = 0, tail = 1
+	q.Write(2) // head = 0, tail = 2
+	q.Write(3) // head = 0, tail = 3
+	q.Write(4) // head = 0, tail = 0 (wrap-around)
+
+	// Step 2: Consume some items to move head
+	b := make([]int, 2)
+	n, err := q.Read(b) // Consume two items, advancing head to 2
+	if err != nil || n != 2 {
+		t.Fatalf("Expected to consume 2 items, got %d and error %v", n, err)
+	}
+	if b[0] != 1 || b[1] != 2 {
+		t.Fatalf("Unexpected values consumed: %v", b[:n])
+	}
+
+	// Step 3: Add more items to cause wrap-around
+	if _, err := q.Write(5); err != nil { // head = 2, tail = 1
+		t.Fatalf("Expected to put item, got error %v", err)
+	}
+	if _, err := q.Write(6); err != nil { // head = 2, tail = 2
+		t.Fatalf("Expected to put item, got error %v", err)
+	}
+
+	// Step 4: Consume items across the wrap-around boundary
+	b = make([]int, 4)
+	n, err = q.Read(b) // Consume all items, spanning the wrap-around
+	if err != nil || n != 4 {
+		t.Fatalf("Expected to consume 4 items, got %d and error %v", n, err)
+	}
+	expected := []int{3, 4, 5, 6}
+	for i, v := range expected {
+		if b[i] != v {
+			t.Fatalf("Unexpected value at index %d: got %d, want %d", i, b[i], v)
+		}
+	}
+}
+
+func TestLargeVolumeReadWrite(t *testing.T) {
+	q := bouncer.New[int](1000000)
+
+	const itemCount = 1_000_000
+
+	go func() {
+		for i := 0; i < itemCount; i++ {
+			q.Write(i)
+		}
+		q.Close()
+	}()
+
+	popped := 0
+	b := make([]int, 1000)
+	for {
+		n, err := q.Read(b)
+		if err != nil {
+			if !errors.Is(err, bouncer.ErrQueueClosed) {
+				t.Fatalf("expected queue closed error, got %v", err)
+			}
+			break
+		}
+		popped += n
+	}
+
+	if popped != itemCount {
+		t.Errorf("expected to get %d items, got %d", itemCount, popped)
+	}
+}
+
 func TestUtility(t *testing.T) {
 	q := bouncer.New[int](4)
 
@@ -164,3 +596,45 @@ func TestUtility(t *testing.T) {
 	}
 }
 
+func TestItems(t *testing.T) {
+	q := bouncer.New[int](4)
+
+	q.Write(1, 2, 3, 4)
+
+	q.Close()
+
+	var collected []int
+	for item := range q.Items() {
+		collected = append(collected, item)
+	}
+
+	expected := []int{1, 2, 3, 4}
+	if !reflect.DeepEqual(collected, expected) {
+		t.Fatalf("expected %v, got %v", expected, collected)
+	}
+}
+
+func TestItemsYieldStop(t *testing.T) {
+	q := bouncer.New[int](4)
+
+	for i := 1; i <= 4; i++ {
+		q.Write(i)
+	}
+
+	it := q.Items()
+
+	items := []int{}
+	it(func(item int) bool {
+		items = append(items, item)
+		return false // Stop iteration after the first item
+	})
+
+	// Validate only the first item was retrieved
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(items))
+	}
+
+	if items[0] != 1 {
+		t.Fatalf("expected item 1, got %v", items[0])
+	}
+}
