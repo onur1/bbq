@@ -70,6 +70,7 @@ func (e *Bouncer[T]) Write(items ...T) (int, error) {
 	var (
 		writes int
 		total  int
+		p1     int
 	)
 
 	// Process items in chunks that fit the buffer
@@ -86,8 +87,15 @@ func (e *Bouncer[T]) Write(items ...T) (int, error) {
 		writes = min(len(items), e.size-e.count)
 		total += writes
 
-		// Insert the items
-		copy(e.buf[e.tail:], items[:writes])
+		if e.tail+writes <= e.size {
+			copy(e.buf[e.tail:], items[:writes])
+		} else {
+			// Wrap-around case: copy in two steps
+			p1 = e.size - e.tail
+			copy(e.buf[e.tail:], items[:p1])
+			copy(e.buf[:writes-p1], items[p1:writes])
+		}
+
 		e.tail = (e.tail + writes) & e.mask
 		e.count += writes
 
