@@ -1,4 +1,4 @@
-package bouncer
+package bbq
 
 import (
 	"errors"
@@ -9,13 +9,13 @@ import (
 
 var (
 	// ErrQueueClosed is returned when operations are attempted on a closed queue.
-	ErrQueueClosed = errors.New("bouncer: operation on closed queue")
+	ErrQueueClosed = errors.New("bbq: operation on closed queue")
 	// ErrInvalidSize is returned when a new size is invalid (e.g., smaller than the current size).
-	ErrInvalidSize = errors.New("bouncer: new size must be greater than the current size")
+	ErrInvalidSize = errors.New("bbq: new size must be greater than the current size")
 )
 
-// Bouncer is a thread-safe bounded queue that supports batch reads/writes and timeouts.
-type Bouncer[T any] struct {
+// BBQ is a thread-safe bounded queue that supports batch reads/writes and timeouts.
+type BBQ[T any] struct {
 	mask     int        // Mask for index wrapping
 	mu       sync.Mutex // Protects all fields below
 	size     int        // Size of the ring buffer
@@ -29,9 +29,9 @@ type Bouncer[T any] struct {
 	expired  bool       // Flag to signal that read operation timed out
 }
 
-// New creates a new Bouncer instance with the specified size, rounding the size up
+// New creates a new BBQ instance with the specified size, rounding the size up
 // to the nearest power of two if it is not already.
-func New[T any](size int) *Bouncer[T] {
+func New[T any](size int) *BBQ[T] {
 	if size <= 0 || (size&(size-1)) != 0 {
 		n := 1
 		for n < size {
@@ -39,7 +39,7 @@ func New[T any](size int) *Bouncer[T] {
 		}
 		size = n
 	}
-	e := &Bouncer[T]{
+	e := &BBQ[T]{
 		buf:  make([]T, size),
 		size: size,
 		mask: size - 1,
@@ -59,7 +59,7 @@ func New[T any](size int) *Bouncer[T] {
 //	if err != nil {
 //	    // Handle error (e.g., queue is closed).
 //	}
-func (e *Bouncer[T]) Write(items ...T) (int, error) {
+func (e *BBQ[T]) Write(items ...T) (int, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -112,7 +112,7 @@ func (e *Bouncer[T]) Write(items ...T) (int, error) {
 // read retrieves items from the queue into the provided slice.
 //   - If waitForFull is true, it blocks until the requested number of items (len(b)) is available.
 //   - If waitForFull is false, it retrieves as many items as are currently available, up to len(b).
-func (e *Bouncer[T]) read(b []T, waitForFull bool) (int, error) {
+func (e *BBQ[T]) read(b []T, waitForFull bool) (int, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -183,7 +183,7 @@ func (e *Bouncer[T]) read(b []T, waitForFull bool) (int, error) {
 //	    // Handle error (e.g., queue is closed).
 //	}
 //	fmt.Println("Got items:", buffer[:n])
-func (e *Bouncer[T]) Read(b []T) (int, error) {
+func (e *BBQ[T]) Read(b []T) (int, error) {
 	return e.read(b, false)
 }
 
@@ -193,7 +193,7 @@ func (e *Bouncer[T]) Read(b []T) (int, error) {
 //     which point a queue closed error will be returned.
 //   - Any goroutines blocked on Put or Read will be unblocked.
 //   - Subsequent calls to Close will have no effect.
-func (e *Bouncer[T]) Close() {
+func (e *BBQ[T]) Close() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if !e.done {
@@ -203,12 +203,13 @@ func (e *Bouncer[T]) Close() {
 	}
 }
 
-// Pipe reads items from one Bouncer and writes them to another, closing the destination
-// when the source is closed.
+// Pipe transfers items from the source BBQ to the destination BBQ.
+//   - The source will close if the destination is closed, but the destination remains
+//     unaffected if the source is closed.
 //
 // Returns the number of items written to the destination in the final operation,
 // or an error if one of the queues is closed.
-func (e *Bouncer[T]) Pipe(dest *Bouncer[T]) (int, error) {
+func (e *BBQ[T]) Pipe(dest *BBQ[T]) (int, error) {
 	buf := make([]T, min(e.Size(), dest.Size()))
 
 	var (
@@ -236,7 +237,7 @@ func (e *Bouncer[T]) Pipe(dest *Bouncer[T]) (int, error) {
 // batches are expected, the returned number of items may be less than len(b).
 //
 // Returns the number of items read and any error encountered.
-func (e *Bouncer[T]) ReadUntil(b []T, timeout time.Duration) (n int, err error) {
+func (e *BBQ[T]) ReadUntil(b []T, timeout time.Duration) (n int, err error) {
 	stopTimer := make(chan struct{})
 	defer close(stopTimer)
 
@@ -261,8 +262,8 @@ func (e *Bouncer[T]) ReadUntil(b []T, timeout time.Duration) (n int, err error) 
 	return
 }
 
-// Items returns an iterator to read items from the Bouncer buffer.
-func (e *Bouncer[T]) Items() iter.Seq[T] {
+// Items returns an iterator to read items from the BBQ buffer.
+func (e *BBQ[T]) Items() iter.Seq[T] {
 	next, stop := iter.Pull(e.getIterator(make([]T, e.Size()), false, 0))
 	return func(yield func(T) bool) {
 		var (
@@ -285,30 +286,30 @@ func (e *Bouncer[T]) Items() iter.Seq[T] {
 	}
 }
 
-// Slices returns an iterator to read items from the Bouncer buffer in batches of up to maxItems.
+// Slices returns an iterator to read items from the BBQ buffer in batches of up to maxItems.
 //   - If maxItems is less than or equal to 0, or exceeds the buffer size, it
 //     defaults to the buffer size.
-func (e *Bouncer[T]) Slices(maxItems int) iter.Seq[[]T] {
+func (e *BBQ[T]) Slices(maxItems int) iter.Seq[[]T] {
 	if maxItems <= 0 || maxItems > e.Size() {
 		maxItems = e.Size()
 	}
 	return e.getIterator(make([]T, maxItems), false, 0)
 }
 
-// SlicesWhen returns an iterator that reads items from the Bouncer buffer into batches of
+// SlicesWhen returns an iterator that reads items from the BBQ buffer into batches of
 // requiredItems, or fewer if the buffer is closed or the timeout expires.
 //   - If requiredItems is less than or equal to 0, or exceeds the buffer size, it
 //     defaults to the buffer size.
 //   - If timeout is greater than 0, the iterator emits the current buffer contents
 //     when the timeout elapses. A value of 0 disables the timeout.
-func (e *Bouncer[T]) SlicesWhen(requiredItems int, timeout time.Duration) iter.Seq[[]T] {
+func (e *BBQ[T]) SlicesWhen(requiredItems int, timeout time.Duration) iter.Seq[[]T] {
 	if requiredItems <= 0 || requiredItems > e.Size() {
 		requiredItems = e.Size()
 	}
 	return e.getIterator(make([]T, requiredItems), true, timeout)
 }
 
-func (e *Bouncer[T]) getIterator(buf []T, waitForFull bool, timeout time.Duration) iter.Seq[[]T] {
+func (e *BBQ[T]) getIterator(buf []T, waitForFull bool, timeout time.Duration) iter.Seq[[]T] {
 	return func(yield func([]T) bool) {
 		var (
 			n   int
@@ -360,14 +361,14 @@ func (e *Bouncer[T]) getIterator(buf []T, waitForFull bool, timeout time.Duratio
 }
 
 // Size returns the total size of the queue.
-func (e *Bouncer[T]) Size() int {
+func (e *BBQ[T]) Size() int {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.size
 }
 
 // IsClosed returns true if the queue is closed.
-func (e *Bouncer[T]) IsClosed() bool {
+func (e *BBQ[T]) IsClosed() bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.done
@@ -375,28 +376,28 @@ func (e *Bouncer[T]) IsClosed() bool {
 
 // Available calculates the remaining space in the queue for new items, indicating
 // how many more can be buffered without blocking.
-func (e *Bouncer[T]) Available() int {
+func (e *BBQ[T]) Available() int {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.size - e.count
 }
 
 // Used provides the number of items currently in the queue that are not read yet.
-func (e *Bouncer[T]) Used() int {
+func (e *BBQ[T]) Used() int {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.count
 }
 
 // IsFull returns true if the queue is full.
-func (e *Bouncer[T]) IsFull() bool {
+func (e *BBQ[T]) IsFull() bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.count == e.size
 }
 
 // IsEmpty returns true if the queue is empty.
-func (e *Bouncer[T]) IsEmpty() bool {
+func (e *BBQ[T]) IsEmpty() bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.count == 0

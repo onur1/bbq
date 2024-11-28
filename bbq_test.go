@@ -1,4 +1,4 @@
-package bouncer_test
+package bbq_test
 
 import (
 	"errors"
@@ -8,11 +8,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/onur1/bouncer"
+	"github.com/onur1/bbq"
 )
 
 func TestReadWriteBasic(t *testing.T) {
-	q := bouncer.New[int](16)
+	q := bbq.New[int](16)
 
 	for i := 1; i <= 5; i++ {
 		q.Write(i)
@@ -44,7 +44,7 @@ func TestReadWriteBasic(t *testing.T) {
 }
 
 func TestReadWriteSingleItem(t *testing.T) {
-	q := bouncer.New[int](1)
+	q := bbq.New[int](1)
 
 	n, err := q.Write(1)
 	if err != nil {
@@ -80,7 +80,7 @@ func TestSizePowerOfTwo(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		q := bouncer.New[int](tt.input)
+		q := bbq.New[int](tt.input)
 		if q.Size() != tt.expected {
 			t.Fatalf("For input %d, expected size %d, got %d", tt.input, tt.expected, q.Size())
 		}
@@ -88,7 +88,7 @@ func TestSizePowerOfTwo(t *testing.T) {
 }
 
 func TestReadUntilAvailableBeforeTimeout(t *testing.T) {
-	q := bouncer.New[int](4)
+	q := bbq.New[int](4)
 
 	go func() {
 		time.Sleep(100 * time.Millisecond) // Simulate delay in writing data
@@ -114,7 +114,7 @@ func TestReadUntilAvailableBeforeTimeout(t *testing.T) {
 }
 
 func TestReadUntilTimeoutElapsed(t *testing.T) {
-	q := bouncer.New[int](4)
+	q := bbq.New[int](4)
 
 	buf := make([]int, 4)
 
@@ -163,7 +163,7 @@ func TestReadUntilTimeoutElapsed(t *testing.T) {
 }
 
 func TestReadUntilQueueClosedFullyDrained(t *testing.T) {
-	q := bouncer.New[int](4)
+	q := bbq.New[int](4)
 
 	go func() {
 		q.Write(6)
@@ -173,7 +173,7 @@ func TestReadUntilQueueClosedFullyDrained(t *testing.T) {
 	buf := make([]int, 4)
 
 	n, err := q.ReadUntil(buf, 500*time.Millisecond)
-	if err != nil && err != bouncer.ErrQueueClosed {
+	if err != nil && err != bbq.ErrQueueClosed {
 		t.Fatalf("unexpected error on close: %v", err)
 	}
 	if n != 1 {
@@ -186,7 +186,7 @@ func TestReadUntilQueueClosedFullyDrained(t *testing.T) {
 
 func TestWriteAfterClose(t *testing.T) {
 	for _, size := range []int{1, 2, 4} {
-		q := bouncer.New[int](size)
+		q := bbq.New[int](size)
 
 		if q.IsClosed() {
 			t.Fatal("expected to be open")
@@ -205,7 +205,7 @@ func TestWriteAfterClose(t *testing.T) {
 			t.Fatal("expected to be closed")
 		}
 
-		if _, err := q.Write(4); !errors.Is(err, bouncer.ErrQueueClosed) {
+		if _, err := q.Write(4); !errors.Is(err, bbq.ErrQueueClosed) {
 			t.Fatalf("expected ErrQueueClosed, got %v", err)
 		}
 
@@ -219,7 +219,7 @@ func TestWriteAfterClose(t *testing.T) {
 }
 
 func TestReadAfterClose(t *testing.T) {
-	q := bouncer.New[int](16)
+	q := bbq.New[int](16)
 
 	for i := 1; i <= 5; i++ {
 		q.Write(i)
@@ -253,13 +253,13 @@ func TestReadAfterClose(t *testing.T) {
 		t.Fatalf("expected results to be fully retrieved, got %v", results)
 	}
 
-	if !errors.Is(gotErr, bouncer.ErrQueueClosed) {
+	if !errors.Is(gotErr, bbq.ErrQueueClosed) {
 		t.Fatalf("expected a ErrQueueClosed, got %v", gotErr)
 	}
 }
 
 func TestWriteConcurrent(t *testing.T) {
-	q := bouncer.New[int](256)
+	q := bbq.New[int](256)
 
 	var wg sync.WaitGroup
 	totalProducers := 64
@@ -308,7 +308,7 @@ func TestWriteConcurrent(t *testing.T) {
 }
 
 func TestReadEmpty(t *testing.T) {
-	q := bouncer.New[int](16)
+	q := bbq.New[int](16)
 
 	b := make([]int, 2)
 
@@ -338,7 +338,7 @@ func TestReadEmpty(t *testing.T) {
 }
 
 func TestSlices(t *testing.T) {
-	q := bouncer.New[int](4)
+	q := bbq.New[int](4)
 
 	go func() {
 		for i := 1; i <= 10; i++ {
@@ -371,7 +371,7 @@ func TestSlices(t *testing.T) {
 }
 
 func TestSlicesYieldStop(t *testing.T) {
-	q := bouncer.New[int](4)
+	q := bbq.New[int](4)
 
 	for i := 1; i <= 4; i++ {
 		q.Write(i)
@@ -396,7 +396,7 @@ func TestSlicesYieldStop(t *testing.T) {
 }
 
 func TestQueueClosedDuringChunkedWriting(t *testing.T) {
-	q := bouncer.New[int](4)
+	q := bbq.New[int](4)
 
 	// Fill partially
 	q.Write(1, 2)
@@ -416,13 +416,13 @@ func TestQueueClosedDuringChunkedWriting(t *testing.T) {
 
 	// Check the error returned to the producer
 	err := <-done
-	if err == nil || !errors.Is(err, bouncer.ErrQueueClosed) {
+	if err == nil || !errors.Is(err, bbq.ErrQueueClosed) {
 		t.Fatalf("expected ErrQueueClosed, got %v", err)
 	}
 }
 
 func TestQueueClosedWithMultipleWriters(t *testing.T) {
-	q := bouncer.New[int](2)
+	q := bbq.New[int](2)
 	q.Write(1, 2) // Fill the buffer
 
 	producerErrors := make(chan error, 3)
@@ -442,14 +442,14 @@ func TestQueueClosedWithMultipleWriters(t *testing.T) {
 	// Verify all producers receive ErrQueueClosed
 	for i := 0; i < 3; i++ {
 		err := <-producerErrors
-		if err == nil || !errors.Is(err, bouncer.ErrQueueClosed) {
+		if err == nil || !errors.Is(err, bbq.ErrQueueClosed) {
 			t.Errorf("expected ErrQueueClosed for producer %d, got %v", i, err)
 		}
 	}
 }
 
 func TestReadWraparound(t *testing.T) {
-	q := bouncer.New[int](4) // Small buffer to force wrap-around
+	q := bbq.New[int](4) // Small buffer to force wrap-around
 
 	// Step 1: Fill the buffer completely
 	q.Write(1) // head = 0, tail = 1
@@ -491,7 +491,7 @@ func TestReadWraparound(t *testing.T) {
 
 func TestWriteWraparound(t *testing.T) {
 	// Step 1: Create a small buffer
-	q := bouncer.New[int](4)
+	q := bbq.New[int](4)
 	_, err := q.Write(1, 2) // Fill indices 0 and 1
 	if err != nil {
 		t.Fatalf("unexpected error during initial Write: %v", err)
@@ -533,7 +533,7 @@ func TestWriteWraparound(t *testing.T) {
 }
 
 func TestLargeVolumeReadWrite(t *testing.T) {
-	q := bouncer.New[int](1000000)
+	q := bbq.New[int](1000000)
 
 	const itemCount = 1_000_000
 
@@ -549,7 +549,7 @@ func TestLargeVolumeReadWrite(t *testing.T) {
 	for {
 		n, err := q.Read(b)
 		if err != nil {
-			if !errors.Is(err, bouncer.ErrQueueClosed) {
+			if !errors.Is(err, bbq.ErrQueueClosed) {
 				t.Fatalf("expected ErrQueueClosed, got %v", err)
 			}
 			break
@@ -563,7 +563,7 @@ func TestLargeVolumeReadWrite(t *testing.T) {
 }
 
 func TestUtility(t *testing.T) {
-	q := bouncer.New[int](4)
+	q := bbq.New[int](4)
 
 	if q.Used() != 0 {
 		t.Errorf("expected Used() to return 0, got %d", q.Used())
@@ -641,7 +641,7 @@ func TestUtility(t *testing.T) {
 }
 
 func TestItems(t *testing.T) {
-	q := bouncer.New[int](4)
+	q := bbq.New[int](4)
 
 	q.Write(1, 2, 3, 4)
 
@@ -659,7 +659,7 @@ func TestItems(t *testing.T) {
 }
 
 func TestItemsYieldStop(t *testing.T) {
-	q := bouncer.New[int](4)
+	q := bbq.New[int](4)
 
 	for i := 1; i <= 4; i++ {
 		q.Write(i)
@@ -684,9 +684,9 @@ func TestItemsYieldStop(t *testing.T) {
 }
 
 func TestPipe(t *testing.T) {
-	a := bouncer.New[int](4)
-	b := bouncer.New[int](2)
-	c := bouncer.New[int](16)
+	a := bbq.New[int](4)
+	b := bbq.New[int](2)
+	c := bbq.New[int](16)
 
 	go a.Pipe(c)
 	go b.Pipe(c)
@@ -717,15 +717,15 @@ func TestPipe(t *testing.T) {
 }
 
 func TestPipeSourceClosed(t *testing.T) {
-	a := bouncer.New[int](2)
-	b := bouncer.New[int](2)
+	a := bbq.New[int](2)
+	b := bbq.New[int](2)
 
 	time.AfterFunc(time.Millisecond*30, func() {
 		a.Close()
 	})
 
 	_, err := a.Pipe(b)
-	if !errors.Is(err, bouncer.ErrQueueClosed) {
+	if !errors.Is(err, bbq.ErrQueueClosed) {
 		t.Fatalf("expected ErrQueueClosed, got %v", err)
 	}
 
@@ -739,9 +739,9 @@ func TestPipeSourceClosed(t *testing.T) {
 }
 
 func TestPipeDestinationClosed(t *testing.T) {
-	a := bouncer.New[int](2)
-	b := bouncer.New[int](2)
-	c := bouncer.New[int](1)
+	a := bbq.New[int](2)
+	b := bbq.New[int](2)
+	c := bbq.New[int](1)
 
 	var wg sync.WaitGroup
 
@@ -749,7 +749,7 @@ func TestPipeDestinationClosed(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		_, err := a.Pipe(c)
-		if !errors.Is(err, bouncer.ErrQueueClosed) {
+		if !errors.Is(err, bbq.ErrQueueClosed) {
 			t.Errorf("expected ErrQueueClosed, got %v", err)
 		}
 	}()
@@ -758,7 +758,7 @@ func TestPipeDestinationClosed(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		_, err := b.Pipe(c)
-		if !errors.Is(err, bouncer.ErrQueueClosed) {
+		if !errors.Is(err, bbq.ErrQueueClosed) {
 			t.Errorf("expected ErrQueueClosed, got %v", err)
 		}
 	}()
@@ -779,7 +779,7 @@ func TestPipeDestinationClosed(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		n, err := b.Write(2, 3, 4, 5, 6)
-		if !errors.Is(err, bouncer.ErrQueueClosed) {
+		if !errors.Is(err, bbq.ErrQueueClosed) {
 			t.Errorf("expected ErrQueueClosed, got %v", err)
 		}
 		if n != 3 {
@@ -801,7 +801,7 @@ func TestPipeDestinationClosed(t *testing.T) {
 }
 
 func TestSlicesDefaultBufferSize(t *testing.T) {
-	q := bouncer.New[int](16)
+	q := bbq.New[int](16)
 
 	for i := 0; i < 16; i++ {
 		q.Write(i)
@@ -817,7 +817,7 @@ func TestSlicesDefaultBufferSize(t *testing.T) {
 }
 
 func TestSlicesWhenDefaultBufferSize(t *testing.T) {
-	q := bouncer.New[int](4)
+	q := bbq.New[int](4)
 
 	for i := 0; i < 4; i++ {
 		q.Write(i)
