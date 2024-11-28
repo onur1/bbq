@@ -299,13 +299,6 @@ func (e *Bouncer[T]) SlicesWhen(requiredItems int, timeout time.Duration) iter.S
 }
 
 func (e *Bouncer[T]) getIterator(buf []T, waitForFull bool, timeout time.Duration) iter.Seq[[]T] {
-	if buf == nil {
-		buf = make([]T, e.Size())
-	}
-	if len(buf) == 0 {
-		panic("bouncer: buffer size must be greater than 0")
-	}
-
 	return func(yield func([]T) bool) {
 		var (
 			n   int
