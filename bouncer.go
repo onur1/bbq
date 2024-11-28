@@ -230,16 +230,21 @@ func (e *Bouncer[T]) ReadUntil(b []T, timeout time.Duration) (n int, err error) 
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 
-	go func() {
-		_, ok := <-timer.C
-		if !ok {
-			return
+	stopTimer := make(chan struct{})
+	defer close(stopTimer)
+
+	go func(wait <-chan time.Time, stop <-chan struct{}) {
+		select {
+		case _, ok := <-wait:
+			if ok {
+				e.mu.Lock()
+				e.expired = true
+				e.canRead.Signal()
+				e.mu.Unlock()
+			}
+		case <-stop:
 		}
-		e.mu.Lock()
-		defer e.mu.Unlock()
-		e.expired = true
-		e.canRead.Signal()
-	}()
+	}(timer.C, stopTimer)
 
 	n, err = e.read(b, true)
 
