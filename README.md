@@ -149,7 +149,7 @@ q.IsEmpty()    // Checks if the queue is empty
 n, err := src.Pipe(dst)
 ```
 
-Transfers items from `source` to `dest`, closing `source` if `dest` is closed while keeping `dest` open.
+Transfers items from `source` to `dest`, closing `source` if `dest` is closed while keeping `dest` open. Returns the number of items written to the destination in the final operation, or an error if one of the queues is closed.
 
 ## License
 

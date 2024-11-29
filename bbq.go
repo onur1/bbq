@@ -49,9 +49,9 @@ func New[T any](size int) *BBQ[T] {
 	return e
 }
 
-// Write adds one or more items to the queue.
-//   - Blocks if the buffer is full until space becomes available or the queue is closed.
-//   - Returns the number of items added or ErrQueueClosed if the queue has been closed.
+// Write adds one or more items to the queue, blocking if the queue is full until
+// space becomes available or the queue is closed. Returns the number of items
+// written or an ErrQueueClosed error.
 //
 // Example:
 //
@@ -171,9 +171,9 @@ func (e *BBQ[T]) read(b []T, waitForFull bool) (int, error) {
 	return reads, nil
 }
 
-// Read reads up to len(b) items from the queue into the provided slice b.
-//   - Blocks if the buffer is empty until items become available or the queue is closed.
-//   - Returns the number of items added or ErrQueueClosed if the queue has been closed.
+// Read reads up to len(b) items from the queue, blocking if the queue is empty
+// until data becomes available or the queue is closed. Returns the number of
+// items read or ErrQueueClosed if the queue has been closed.
 //
 // Example:
 //
@@ -187,12 +187,8 @@ func (e *BBQ[T]) Read(b []T) (int, error) {
 	return e.read(b, false)
 }
 
-// Close marks the queue as closed and prevents potential deadlocks.
-//   - After closing, no new items can be added using Put, but the consumer
-//     will continue retrieving data until the buffer is fully drained, at
-//     which point a queue closed error will be returned.
-//   - Any goroutines blocked on Put or Read will be unblocked.
-//   - Subsequent calls to Close will have no effect.
+// Close closes the queue, preventing further writes while allowing the consumer
+// to drain remaining data.
 func (e *BBQ[T]) Close() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -203,12 +199,9 @@ func (e *BBQ[T]) Close() {
 	}
 }
 
-// Pipe transfers items from the source BBQ to the destination BBQ.
-//   - The source will close if the destination is closed, but the destination remains
-//     unaffected if the source is closed.
-//
-// Returns the number of items written to the destination in the final operation,
-// or an error if one of the queues is closed.
+// Pipe transfers items from source to dest, closing source if dest is closed
+// while keeping dest open. Returns the number of items written to the destination
+// in the final operation, or an error if one of the queues is closed.
 func (e *BBQ[T]) Pipe(dest *BBQ[T]) (int, error) {
 	buf := make([]T, min(e.Size(), dest.Size()))
 
@@ -232,11 +225,9 @@ func (e *BBQ[T]) Pipe(dest *BBQ[T]) (int, error) {
 	}
 }
 
-// ReadUntil retrieves items from the queue into the provided slice b, waiting until
-// either len(b) items are available, or the specified timeout duration elapses. If no more
-// batches are expected, the returned number of items may be less than len(b).
-//
-// Returns the number of items read and any error encountered.
+// ReadUntil reads exactly len(b) items or until the specified timeout elapses,
+// returning early if data becomes available.
+// Returns ErrQueueClosed if the queue is closed and fully drained.
 func (e *BBQ[T]) ReadUntil(b []T, timeout time.Duration) (n int, err error) {
 	stopTimer := make(chan struct{})
 	defer close(stopTimer)
@@ -262,7 +253,7 @@ func (e *BBQ[T]) ReadUntil(b []T, timeout time.Duration) (n int, err error) {
 	return
 }
 
-// Items returns an iterator to read items from the BBQ buffer.
+// Items returns an iterator to stream individual items from the queue.
 func (e *BBQ[T]) Items() iter.Seq[T] {
 	next, stop := iter.Pull(e.getIterator(make([]T, e.Size()), false, 0))
 	return func(yield func(T) bool) {
@@ -286,7 +277,7 @@ func (e *BBQ[T]) Items() iter.Seq[T] {
 	}
 }
 
-// Slices returns an iterator to read items from the BBQ buffer in batches of up to maxItems.
+// Slices returns an iterator to stream batches of items (up to maxItems) from the queue.
 //   - If maxItems is less than or equal to 0, or exceeds the buffer size, it
 //     defaults to the buffer size.
 func (e *BBQ[T]) Slices(maxItems int) iter.Seq[[]T] {
@@ -296,12 +287,11 @@ func (e *BBQ[T]) Slices(maxItems int) iter.Seq[[]T] {
 	return e.getIterator(make([]T, maxItems), false, 0)
 }
 
-// SlicesWhen returns an iterator that reads items from the BBQ buffer into batches of
-// requiredItems, or fewer if the buffer is closed or the timeout expires.
+// SlicesWhen returns an iterator to stream batches of a specific size or fewer when
+// the timeout expires.
 //   - If requiredItems is less than or equal to 0, or exceeds the buffer size, it
 //     defaults to the buffer size.
-//   - If timeout is greater than 0, the iterator emits the current buffer contents
-//     when the timeout elapses. A value of 0 disables the timeout.
+//   - A value of 0 disables the timeout.
 func (e *BBQ[T]) SlicesWhen(requiredItems int, timeout time.Duration) iter.Seq[[]T] {
 	if requiredItems <= 0 || requiredItems > e.Size() {
 		requiredItems = e.Size()
@@ -374,15 +364,15 @@ func (e *BBQ[T]) IsClosed() bool {
 	return e.done
 }
 
-// Available calculates the remaining space in the queue for new items, indicating
-// how many more can be buffered without blocking.
+// Available returns the remaining space for new items, indicating how many
+// more can be buffered without blocking.
 func (e *BBQ[T]) Available() int {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.size - e.count
 }
 
-// Used provides the number of items currently in the queue that are not read yet.
+// Used returns the number of items currently in the queue.
 func (e *BBQ[T]) Used() int {
 	e.mu.Lock()
 	defer e.mu.Unlock()
