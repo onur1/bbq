@@ -54,7 +54,7 @@ func main() {
 }
 ```
 
-## API Overview
+## API
 
 ### Creating a Queue
 
@@ -62,7 +62,7 @@ func main() {
 q := bbq.New[int](size)
 ```
 
-Creates a new `BBQ` instance with the specified `size`, automatically rounding up to the nearest power of two for optimal performance.
+Creates a new `BBQ` instance with the specified `size`, rounding up to the nearest power of two for optimal performance.
 
 
 ### Writing to the Queue
@@ -81,7 +81,7 @@ Adds one or more items to the queue, blocking if the queue is full until space b
 n, err := q.Read(buffer)
 ```
 
-Reads up to `len(buffer)` items from the queue, blocking if the queue is empty until data becomes available or the queue is closed.
+Reads up to `len(buffer)` items from the queue, blocking if the queue is empty until data becomes available or the queue is closed. Returns the number of items read or ErrQueueClosed if the queue has been closed.
 
 #### `ReadUntil`
 
@@ -113,7 +113,7 @@ for batch := range q.Slices(4) {
 
 Streams batches of items (up to `maxItems`) from the queue.
 
-#### Stream with Timeout
+#### Stream Batches with Timeout
 
 ```go
 for batch := range q.SlicesWhen(4, time.Second) {
@@ -131,7 +131,7 @@ Streams batches of a specific size or fewer when the timeout expires.
 q.Close()
 ```
 
-Prevents further writes but allows consumers to drain the queue.
+Prevents further writes while allowing the consumer to drain remaining data. Once the buffer is fully drained, operations will return `ErrQueueClosed`.
 
 #### Inspecting the Queue
 
