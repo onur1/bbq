@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/onur1/bbq"
+	"github.com/tetsuo/bbq"
 )
 
 func TestReadWriteBasic(t *testing.T) {

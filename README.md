@@ -7,7 +7,7 @@
 To install BBQ, run:
 
 ```bash
-go get github.com/onur1/bbq
+go get github.com/tetsuo/bbq
 ```
 
 ## Example
@@ -18,7 +18,7 @@ package main
 import (
 	"fmt"
 
-	"github.com/onur1/bbq"
+	"github.com/tetsuo/bbq"
 )
 
 func main() {
